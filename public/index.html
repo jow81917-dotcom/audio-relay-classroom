@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Classroom - Join</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="landing-container">
+        <h1>🎓 Audio Classroom</h1>
+        <p class="subtitle">Server-Relayed Audio for Reliable Cross-Network Teaching</p>
+
+        <div class="join-options">
+            <div class="option-card teacher-card">
+                <h2>👨‍🏫 I'm a Teacher</h2>
+                <p>Start a new classroom session</p>
+                <form id="teacherJoinForm">
+                    <input type="text" id="teacherRoomId" placeholder="Room ID (e.g., math101)" required>
+                    <button type="submit" class="primary-btn">Create/Join as Teacher</button>
+                </form>
+            </div>
+
+            <div class="option-card student-card">
+                <h2>🧑‍🎓 I'm a Student</h2>
+                <p>Join an existing classroom</p>
+                <form id="studentJoinForm">
+                    <input type="text" id="studentRoomId" placeholder="Room ID provided by teacher" required>
+                    <button type="submit" class="secondary-btn">Join as Student</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <h3>How It Works</h3>
+            <p>🔊 Audio is relayed through the server - works on any network!</p>
+            <p>📚 Teachers can share images and draw on them</p>
+            <p>🌐 No TURN servers needed - just a stable internet connection</p>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('teacherJoinForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const roomId = document.getElementById('teacherRoomId').value.trim();
+            if (roomId) {
+                window.location.href = `/teacher.html?room=${encodeURIComponent(roomId)}`;
+            }
+        });
+
+        document.getElementById('studentJoinForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const roomId = document.getElementById('studentRoomId').value.trim();
+            if (roomId) {
+                window.location.href = `/student.html?room=${encodeURIComponent(roomId)}`;
+            }
+        });
+    </script>
+</body>
+</html>
