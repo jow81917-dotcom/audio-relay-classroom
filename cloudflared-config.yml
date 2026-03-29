@@ -1,0 +1,13 @@
+tunnel: audio-relay-classroom
+credentials-file: ~/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: <YOUR_DOMAIN>
+    service: http://localhost:3000
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 30s
+      tcpKeepAlive: 30s
+      httpHostHeader: <YOUR_DOMAIN>
+      disableChunkedEncoding: false
+  - service: http_status:404
