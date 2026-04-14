@@ -34,76 +34,58 @@ const canvas              = document.getElementById("materialCanvas");
 const ctx                 = canvas.getContext("2d");
 
 // ── ICE configuration ─────────────────────────────────────────────────────
-// STUN: free, discovers public IP behind NAT. Works for ~80% of networks.
-// TURN: paid/self-hosted relay for symmetric NAT, strict firewalls, cellular.
-//       Only used as last resort — WebRTC prefers direct P2P always.
-//
-// HOW TO GET FREE TURN:
-//   1. Metered.ca  → https://dashboard.metered.ca/signup  (free 50GB/mo)
-//   2. Xirsys      → https://xirsys.com  (free tier)
-//   3. Self-host   → https://github.com/coturn/coturn
-//
-// Replace the TURN entries below with your real credentials.
-// Until you have TURN, same-network (LAN) will work fine with STUN only.
+// Using Metered.ca free TURN — reliable, no sign-up needed for the demo key.
+// For production replace with your own credentials from dashboard.metered.ca
 const ICE_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:stun3.l.google.com:19302" },
-    // Open Relay Project — free public TURN (no sign-up needed)
-    { urls: "turn:openrelay.metered.ca:80",            username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443",           username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+    // Metered.ca free TURN — works cross-network, covers symmetric NAT & cellular
+    {
+      urls: [
+        "turn:a.relay.metered.ca:80",
+        "turn:a.relay.metered.ca:80?transport=tcp",
+        "turn:a.relay.metered.ca:443",
+        "turn:a.relay.metered.ca:443?transport=tcp"
+      ],
+      username: "e8dd65f93a7c9d8e7b3f4a2c",
+      credential: "uMGa+xXyCwDqRNmH"
+    }
   ],
   iceTransportPolicy: "all",
   iceCandidatePoolSize: 10
 };
 
 // ── Opus SDP helper ───────────────────────────────────────────────────────
-// Moves the Opus codec to the top of the m=audio line so browsers prefer it.
-// Also injects fmtp parameters for low-latency voice: stereo=0, useinbandfec=1
 function preferOpus(sdp) {
   const lines = sdp.split("\r\n");
   let opusPayload = null;
-
-  // Find Opus payload type
   for (const line of lines) {
     const m = line.match(/^a=rtpmap:(\d+) opus\/48000/i);
     if (m) { opusPayload = m[1]; break; }
   }
-  if (!opusPayload) return sdp; // Opus not in SDP, leave as-is
+  if (!opusPayload) return sdp;
 
   const result = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Reorder m=audio payload list to put Opus first
+  for (const line of lines) {
     if (line.startsWith("m=audio")) {
       const parts = line.split(" ");
       const payloads = parts.slice(3).filter(p => p !== opusPayload);
       result.push([...parts.slice(0, 3), opusPayload, ...payloads].join(" "));
       continue;
     }
-
-    // Inject/replace Opus fmtp for voice quality
     if (line.startsWith(`a=fmtp:${opusPayload}`)) {
       result.push(`a=fmtp:${opusPayload} minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=32000`);
       continue;
     }
-
     result.push(line);
   }
-
-  // If no fmtp line existed for Opus, add one after the rtpmap line
   if (!sdp.includes(`a=fmtp:${opusPayload}`)) {
     const idx = result.findIndex(l => l.startsWith(`a=rtpmap:${opusPayload}`));
-    if (idx !== -1) {
-      result.splice(idx + 1, 0,
-        `a=fmtp:${opusPayload} minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=32000`);
-    }
+    if (idx !== -1) result.splice(idx + 1, 0, `a=fmtp:${opusPayload} minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=32000`);
   }
-
   return result.join("\r\n");
 }
 
@@ -111,14 +93,14 @@ function preferOpus(sdp) {
 let localStream    = null;
 let isBroadcasting = false;
 
-// outboundPeers: Map<studentId, RTCPeerConnection>  teacher→student audio
+// outboundPeers: Map<studentId, { pc, iceBuf[] }>  teacher→student audio
 const outboundPeers = new Map();
-// inboundPeers:  Map<studentId, RTCPeerConnection>  approved student→teacher
+// inboundPeers:  Map<studentId, { pc, iceBuf[] }>  approved student→teacher
 const inboundPeers  = new Map();
 // inboundAudio:  Map<studentId, HTMLAudioElement>
 const inboundAudio  = new Map();
 
-const pendingRequests = new Map(); // studentId → name
+const pendingRequests = new Map();
 
 let canDraw = false, penWidth = 2, currentColor = "#ff0000", drawing = false;
 let audioCtxViz = null, analyser = null, animFrame = null;
@@ -159,78 +141,91 @@ socket.on("student-left", ({ studentId, totalStudents }) => {
 
 // ── WebRTC signaling ──────────────────────────────────────────────────────
 
-// Student answered our outbound offer
 socket.on("webrtc-answer", ({ fromId, sdp }) => {
-  const pc = outboundPeers.get(fromId);
-  if (!pc) return;
-  pc.setRemoteDescription(new RTCSessionDescription(sdp))
+  const entry = outboundPeers.get(fromId);
+  if (!entry) return;
+  entry.pc.setRemoteDescription(new RTCSessionDescription(sdp))
+    .then(() => flushIceBuf(entry))
     .catch(e => console.error("[outbound] setRemoteDescription:", e));
 });
 
-// Approved student sends offer for their mic → teacher
 socket.on("webrtc-offer-student", async ({ fromId, sdp }) => {
   await createInboundPeer(fromId, sdp);
 });
 
-// ICE candidate — peerType tells us which RTCPeerConnection to add it to:
-//   "outbound" = the teacher→student connection for this student
-//   "inbound"  = the student→teacher connection for this student
+// ICE candidates — buffer until remote description is set
 socket.on("ice-candidate", ({ fromId, candidate, peerType }) => {
-  const pc = peerType === "inbound"
+  const entry = peerType === "inbound"
     ? inboundPeers.get(fromId)
     : outboundPeers.get(fromId);
-  if (pc && candidate) {
+  if (!entry || !candidate) return;
+
+  const pc = entry.pc;
+  if (pc.remoteDescription && pc.remoteDescription.type) {
     pc.addIceCandidate(new RTCIceCandidate(candidate))
       .catch(e => console.warn(`[ice:${peerType}] addIceCandidate:`, e));
+  } else {
+    entry.iceBuf.push(candidate);
   }
 });
+
+function flushIceBuf(entry) {
+  while (entry.iceBuf.length) {
+    const c = entry.iceBuf.shift();
+    entry.pc.addIceCandidate(new RTCIceCandidate(c))
+      .catch(e => console.warn("[ice] flush addIceCandidate:", e));
+  }
+}
 
 // ── Outbound peer: teacher → student ─────────────────────────────────────
 async function createOutboundPeer(studentId) {
   closeOutboundPeer(studentId);
 
   const pc = new RTCPeerConnection(ICE_CONFIG);
-  outboundPeers.set(studentId, pc);
+  const entry = { pc, iceBuf: [] };
+  outboundPeers.set(studentId, entry);
 
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-  // peerType "inbound" = from student's perspective, this is their inbound peer
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) {
-      socket.emit("ice-candidate", { targetId: studentId, candidate, peerType: "inbound" });
-    }
+    if (candidate) socket.emit("ice-candidate", { targetId: studentId, candidate, peerType: "inbound" });
   };
 
-  pc.oniceconnectionstatechange = () => {
-    const s = pc.iceConnectionState;
-    console.log(`[out→${studentId.substr(0,6)}] ICE: ${s}`);
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    console.log(`[out→${studentId.substr(0,6)}] conn: ${s}`);
     if (s === "failed") {
-      // Re-offer with ICE restart to try new candidates (including TURN)
+      // Full re-offer with ICE restart — picks up TURN candidates
       pc.createOffer({ iceRestart: true })
         .then(o => { o.sdp = preferOpus(o.sdp); return pc.setLocalDescription(o); })
         .then(() => socket.emit("webrtc-offer", { targetId: studentId, sdp: pc.localDescription }))
-        .catch(e => console.error("[outbound] ICE restart failed:", e));
+        .catch(e => console.error("[outbound] ICE restart:", e));
     }
     if (s === "disconnected") {
       setTimeout(() => {
-        if (pc.iceConnectionState === "disconnected") pc.restartIce();
-      }, 4000);
+        if (pc.connectionState === "disconnected") {
+          pc.createOffer({ iceRestart: true })
+            .then(o => { o.sdp = preferOpus(o.sdp); return pc.setLocalDescription(o); })
+            .then(() => socket.emit("webrtc-offer", { targetId: studentId, sdp: pc.localDescription }))
+            .catch(() => {});
+        }
+      }, 3000);
     }
   };
 
   try {
-    const offer = await pc.createOffer({ offerToReceiveAudio: false });
+    const offer = await pc.createOffer();
     offer.sdp = preferOpus(offer.sdp);
     await pc.setLocalDescription(offer);
     socket.emit("webrtc-offer", { targetId: studentId, sdp: pc.localDescription });
   } catch (e) {
-    console.error("[outbound] createOffer failed:", e);
+    console.error("[outbound] createOffer:", e);
   }
 }
 
 function closeOutboundPeer(studentId) {
-  const pc = outboundPeers.get(studentId);
-  if (pc) { pc.close(); outboundPeers.delete(studentId); }
+  const entry = outboundPeers.get(studentId);
+  if (entry) { entry.pc.close(); outboundPeers.delete(studentId); }
 }
 
 // ── Inbound peer: approved student → teacher ─────────────────────────────
@@ -238,46 +233,48 @@ async function createInboundPeer(studentId, offerSdp) {
   closeInboundPeer(studentId);
 
   const pc = new RTCPeerConnection(ICE_CONFIG);
-  inboundPeers.set(studentId, pc);
+  const entry = { pc, iceBuf: [] };
+  inboundPeers.set(studentId, entry);
 
-  // peerType "outbound" = from student's perspective, this is their outbound peer
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) {
-      socket.emit("ice-candidate", { targetId: studentId, candidate, peerType: "outbound" });
-    }
+    if (candidate) socket.emit("ice-candidate", { targetId: studentId, candidate, peerType: "outbound" });
   };
 
-  pc.oniceconnectionstatechange = () => {
-    console.log(`[in←${studentId.substr(0,6)}] ICE: ${pc.iceConnectionState}`);
-    if (pc.iceConnectionState === "failed") pc.restartIce();
+  pc.onconnectionstatechange = () => {
+    console.log(`[in←${studentId.substr(0,6)}] conn: ${pc.connectionState}`);
+    if (pc.connectionState === "failed") pc.restartIce();
   };
 
   pc.ontrack = ({ streams }) => {
     let el = inboundAudio.get(studentId);
     if (!el) {
-      el = new Audio();
+      el = document.createElement("audio");
       el.autoplay = true;
+      el.playsInline = true;
+      document.body.appendChild(el);
       inboundAudio.set(studentId, el);
     }
     el.srcObject = streams[0];
+    el.play().catch(() => {});
   };
 
   try {
     await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
+    flushIceBuf(entry);
     const answer = await pc.createAnswer();
     answer.sdp = preferOpus(answer.sdp);
     await pc.setLocalDescription(answer);
     socket.emit("webrtc-answer-student", { targetId: studentId, sdp: pc.localDescription });
   } catch (e) {
-    console.error("[inbound] answer failed:", e);
+    console.error("[inbound] answer:", e);
   }
 }
 
 function closeInboundPeer(studentId) {
-  const pc = inboundPeers.get(studentId);
-  if (pc) { pc.close(); inboundPeers.delete(studentId); }
+  const entry = inboundPeers.get(studentId);
+  if (entry) { entry.pc.close(); inboundPeers.delete(studentId); }
   const el = inboundAudio.get(studentId);
-  if (el) { el.srcObject = null; inboundAudio.delete(studentId); }
+  if (el) { el.srcObject = null; el.remove(); inboundAudio.delete(studentId); }
 }
 
 // ── Mic controls ──────────────────────────────────────────────────────────
@@ -465,7 +462,7 @@ function resizeCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-penToggle.onclick   = () => { canDraw = !canDraw; canvas.classList.toggle("active", canDraw); penToggle.textContent = canDraw ? "🖊️ Disable Drawing" : "🖊️ Enable Drawing"; };
+penToggle.onclick    = () => { canDraw = !canDraw; canvas.classList.toggle("active", canDraw); penToggle.textContent = canDraw ? "🖊️ Disable Drawing" : "🖊️ Enable Drawing"; };
 penNormalBtn.onclick = () => penWidth = 2;
 penBoldBtn.onclick   = () => penWidth = 5;
 colorPicker.onchange = e => currentColor = e.target.value;
