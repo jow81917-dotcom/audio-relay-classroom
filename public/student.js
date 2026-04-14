@@ -29,36 +29,39 @@ const noMaterial          = document.getElementById("noMaterial");
 const ctx                 = canvas.getContext("2d");
 
 // ── ICE configuration ─────────────────────────────────────────────────────
-// Metered.ca free TURN — works cross-network, covers symmetric NAT & cellular.
-// For production replace with your own credentials from dashboard.metered.ca
+// Multiple verified free TURN providers for redundancy.
+// If one fails auth, the next will be tried automatically.
 const ICE_CONFIG = {
   iceServers: [
+    { urls: "stun:stun.relay.metered.ca:80" },
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" },
-    {
-      urls: [
-        "turn:a.relay.metered.ca:80",
-        "turn:a.relay.metered.ca:80?transport=tcp",
-        "turn:a.relay.metered.ca:443",
-        "turn:a.relay.metered.ca:443?transport=tcp"
-      ],
-      username: "e8dd65f93a7c9d8e7b3f4a2c",
-      credential: "uMGa+xXyCwDqRNmH"
-    }
+    { urls: "turn:global.relay.metered.ca:80",                    username: "c42ac28730f2eccb2531db32", credential: "Os9aeQUDwLn1A7Qw" },
+    { urls: "turn:global.relay.metered.ca:80?transport=tcp",      username: "c42ac28730f2eccb2531db32", credential: "Os9aeQUDwLn1A7Qw" },
+    { urls: "turn:global.relay.metered.ca:443",                   username: "c42ac28730f2eccb2531db32", credential: "Os9aeQUDwLn1A7Qw" },
+    { urls: "turns:global.relay.metered.ca:443?transport=tcp",    username: "c42ac28730f2eccb2531db32", credential: "Os9aeQUDwLn1A7Qw" }
   ],
   iceTransportPolicy: "all",
   iceCandidatePoolSize: 10
 };
 
+// ── ICE diagnostic logger ─────────────────────────────────────────────────
+function logCandidate(label, c) {
+  if (!c) return;
+  const type = c.type || "?";
+  const proto = c.protocol || "?";
+  const addr = c.address || c.ip || "?";
+  const port = c.port || "?";
+  console.log(`[ICE][${label}] ${type} ${proto} ${addr}:${port}`);
+  if (type === "relay") console.log(`%c[ICE][${label}] ✅ TURN relay candidate gathered`, "color:green;font-weight:bold");
+  if (type === "srflx") console.log(`%c[ICE][${label}] ✅ STUN srflx candidate gathered`, "color:blue");
+}
+
 // ── State ─────────────────────────────────────────────────────────────────
-// inboundPeer: { pc, iceBuf[] }  — teacher → student
-// outboundPeer: { pc, iceBuf[] } — student → teacher (approved only)
-let inboundPeer  = null;
-let outboundPeer = null;
-let teacherAudio = null;   // <audio> element for teacher's voice
-let localStream  = null;   // mic stream when approved
+let inboundPeer  = null;   // { pc, iceBuf[], restartTimer }
+let outboundPeer = null;   // { pc, iceBuf[] }
+let teacherAudio = null;
+let localStream  = null;
 
 let myId          = null;
 let teacherId     = null;
@@ -72,6 +75,7 @@ socket.on("connect", () => {
   connectionStatus.textContent = "Connected";
   connectionStatus.className = "status-badge connected";
   socket.emit("join-as-student", roomId, studentName);
+  console.log("[student] socket connected:", socket.id);
 });
 
 socket.on("disconnect", () => {
@@ -83,6 +87,7 @@ socket.on("disconnect", () => {
 });
 
 socket.on("student-joined", ({ hasTeacher, activeSpeaker, material }) => {
+  console.log("[student] joined room. hasTeacher:", hasTeacher, "activeSpeaker:", activeSpeaker);
   if (hasTeacher) {
     teacherStatus.textContent = "Teacher Online";
     teacherStatus.className = "status-value active";
@@ -95,27 +100,29 @@ socket.on("student-joined", ({ hasTeacher, activeSpeaker, material }) => {
 socket.on("join-error", ({ message }) => alert("Cannot join: " + message));
 
 socket.on("teacher-left", () => {
+  console.log("[student] teacher left");
   teacherStatus.textContent = "Teacher Offline";
   teacherStatus.className = "status-value inactive";
-  audioStatus.textContent = "No Audio";
-  audioStatus.className = "status-value inactive";
+  setAudioStatus("No Audio", false);
   closeInboundPeer();
   closeOutboundPeer();
 });
 
 // ── WebRTC signaling ──────────────────────────────────────────────────────
-
-// Teacher sends offer → we create inbound peer and answer
 socket.on("webrtc-offer", async ({ fromId, sdp }) => {
+  console.log("[student] received webrtc-offer from teacher:", fromId.substr(0,6));
   teacherId = fromId;
   await createInboundPeer(fromId, sdp);
 });
 
-// Teacher answered our outbound offer
 socket.on("webrtc-answer-student", ({ sdp }) => {
   if (!outboundPeer) return;
+  console.log("[outbound] received answer from teacher");
   outboundPeer.pc.setRemoteDescription(new RTCSessionDescription(sdp))
-    .then(() => flushIceBuf(outboundPeer))
+    .then(() => {
+      console.log("[outbound] remote desc set, flushing", outboundPeer.iceBuf.length, "buffered candidates");
+      flushIceBuf(outboundPeer, "outbound");
+    })
     .catch(e => console.error("[outbound] setRemoteDescription:", e));
 });
 
@@ -124,78 +131,109 @@ socket.on("ice-candidate", ({ candidate, peerType }) => {
   const peer = peerType === "outbound" ? outboundPeer : inboundPeer;
   if (!peer || !candidate) return;
 
+  const label = peerType === "outbound" ? "outbound" : "inbound";
   const pc = peer.pc;
   if (pc.remoteDescription && pc.remoteDescription.type) {
     pc.addIceCandidate(new RTCIceCandidate(candidate))
-      .catch(e => console.warn(`[ice:${peerType}] addIceCandidate:`, e));
+      .catch(e => console.warn(`[ice:${label}] addIceCandidate:`, e));
   } else {
+    console.log(`[ice:${label}] buffering candidate (no remote desc yet)`);
     peer.iceBuf.push(candidate);
   }
 });
 
-function flushIceBuf(peer) {
+function flushIceBuf(peer, label) {
   while (peer.iceBuf.length) {
     const c = peer.iceBuf.shift();
     peer.pc.addIceCandidate(new RTCIceCandidate(c))
-      .catch(e => console.warn("[ice] flush:", e));
+      .catch(e => console.warn(`[ice:${label}] flush:`, e));
   }
 }
 
 // ── Inbound peer: receive teacher audio ───────────────────────────────────
 async function createInboundPeer(fromId, offerSdp) {
   closeInboundPeer();
+  console.log("[inbound] creating peer to receive teacher audio");
 
   const pc = new RTCPeerConnection(ICE_CONFIG);
-  inboundPeer = { pc, iceBuf: [] };
+  inboundPeer = { pc, iceBuf: [], restartTimer: null };
 
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) socket.emit("ice-candidate", { targetId: fromId, candidate, peerType: "outbound" });
+    if (candidate) {
+      logCandidate("inbound", candidate);
+      socket.emit("ice-candidate", { targetId: fromId, candidate, peerType: "outbound" });
+    } else {
+      console.log("[inbound] ICE gathering complete");
+    }
+  };
+
+  pc.onicegatheringstatechange = () => {
+    console.log("[inbound] gathering:", pc.iceGatheringState);
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    console.log("[inbound] ICE:", pc.iceConnectionState);
   };
 
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
     console.log("[inbound] conn:", s);
+
+    if (inboundPeer && inboundPeer.restartTimer) {
+      clearTimeout(inboundPeer.restartTimer);
+      inboundPeer.restartTimer = null;
+    }
+
     if (s === "connected") {
-      audioStatus.textContent = "Live";
-      audioStatus.className = "status-value active";
-      // Ensure audio plays once connection is confirmed
-      if (teacherAudio && teacherAudio.paused) {
-        teacherAudio.play().catch(() => {});
+      console.log("%c[inbound] ✅ CONNECTED — audio should be flowing", "color:green;font-weight:bold");
+      setAudioStatus("Live", true);
+      // Guarantee audio plays once connection is confirmed
+      if (teacherAudio) {
+        teacherAudio.play().catch(e => console.warn("[inbound] play() on connected:", e));
       }
-    } else if (s === "failed") {
-      audioStatus.textContent = "No Audio";
-      audioStatus.className = "status-value inactive";
+    }
+
+    if (s === "failed") {
+      console.warn("[inbound] ❌ FAILED — restarting ICE");
+      setAudioStatus("Reconnecting...", false);
       pc.restartIce();
-    } else if (s === "disconnected") {
-      audioStatus.textContent = "Reconnecting...";
-      audioStatus.className = "status-value inactive";
-      setTimeout(() => {
-        if (pc.connectionState === "disconnected") pc.restartIce();
-      }, 3000);
+    }
+
+    if (s === "disconnected") {
+      console.warn("[inbound] disconnected — will restart in 4s if not recovered");
+      setAudioStatus("Reconnecting...", false);
+      inboundPeer.restartTimer = setTimeout(() => {
+        if (pc.connectionState !== "connected" && pc.connectionState !== "closed") {
+          console.warn("[inbound] still disconnected, forcing ICE restart");
+          pc.restartIce();
+        }
+      }, 4000);
     }
   };
 
-  // Track arrives — wire up audio element immediately
+  // Track arrives — wire up audio element
   pc.ontrack = ({ streams }) => {
-    console.log("[inbound] track received");
+    console.log("[inbound] track received, streams:", streams.length);
     if (!teacherAudio) {
       teacherAudio = document.createElement("audio");
       teacherAudio.autoplay = true;
       teacherAudio.playsInline = true;
       teacherAudio.muted = false;
       document.body.appendChild(teacherAudio);
+      console.log("[inbound] audio element created and appended to DOM");
     }
     teacherAudio.srcObject = streams[0];
-    // Always attempt play — browser will allow it if user has interacted
-    teacherAudio.play().catch(() => {
-      // Autoplay blocked — will retry when user unlocks
-      console.log("[inbound] autoplay blocked, waiting for user gesture");
-    });
+    console.log("[inbound] srcObject set, audioUnlocked:", audioUnlocked);
+    // Always try play — succeeds if user has interacted, queued otherwise
+    teacherAudio.play()
+      .then(() => console.log("[inbound] play() succeeded"))
+      .catch(e => console.warn("[inbound] play() blocked (needs user gesture):", e.name));
   };
 
   try {
     await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
-    flushIceBuf(inboundPeer);
+    console.log("[inbound] remote desc set, flushing", inboundPeer.iceBuf.length, "buffered candidates");
+    flushIceBuf(inboundPeer, "inbound");
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     socket.emit("webrtc-answer", { targetId: fromId, sdp: pc.localDescription });
@@ -206,15 +244,23 @@ async function createInboundPeer(fromId, offerSdp) {
 }
 
 function closeInboundPeer() {
-  if (inboundPeer)  { inboundPeer.pc.close(); inboundPeer = null; }
-  if (teacherAudio) { teacherAudio.srcObject = null; teacherAudio.remove(); teacherAudio = null; }
-  audioStatus.textContent = "No Audio";
-  audioStatus.className = "status-value inactive";
+  if (inboundPeer) {
+    if (inboundPeer.restartTimer) clearTimeout(inboundPeer.restartTimer);
+    inboundPeer.pc.close();
+    inboundPeer = null;
+  }
+  if (teacherAudio) {
+    teacherAudio.srcObject = null;
+    teacherAudio.remove();
+    teacherAudio = null;
+  }
+  setAudioStatus("No Audio", false);
 }
 
 // ── Outbound peer: send mic to teacher when approved ──────────────────────
 async function createOutboundPeer(toTeacherId) {
   closeOutboundPeer();
+  console.log("[outbound] creating peer to send mic to teacher");
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
@@ -226,6 +272,7 @@ async function createOutboundPeer(toTeacherId) {
         sampleRate: 48000
       }
     });
+    console.log("[outbound] mic acquired");
   } catch (e) {
     console.error("[outbound] getUserMedia:", e);
     alert("Microphone error: " + e.message);
@@ -237,19 +284,34 @@ async function createOutboundPeer(toTeacherId) {
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) socket.emit("ice-candidate", { targetId: toTeacherId, candidate, peerType: "inbound" });
+    if (candidate) {
+      logCandidate("outbound", candidate);
+      socket.emit("ice-candidate", { targetId: toTeacherId, candidate, peerType: "inbound" });
+    } else {
+      console.log("[outbound] ICE gathering complete");
+    }
+  };
+
+  pc.onicegatheringstatechange = () => {
+    console.log("[outbound] gathering:", pc.iceGatheringState);
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    console.log("[outbound] ICE:", pc.iceConnectionState);
   };
 
   pc.onconnectionstatechange = () => {
-    console.log("[outbound] conn:", pc.connectionState);
-    if (pc.connectionState === "failed") pc.restartIce();
+    const s = pc.connectionState;
+    console.log("[outbound] conn:", s);
+    if (s === "connected") console.log("%c[outbound] ✅ CONNECTED — mic flowing to teacher", "color:green;font-weight:bold");
+    if (s === "failed") { console.warn("[outbound] ❌ FAILED — restarting ICE"); pc.restartIce(); }
   };
 
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     socket.emit("webrtc-offer-student", { targetId: toTeacherId, sdp: pc.localDescription });
-    console.log("[outbound] offer sent");
+    console.log("[outbound] offer sent to teacher");
   } catch (e) {
     console.error("[outbound] createOffer:", e);
   }
@@ -260,18 +322,24 @@ function closeOutboundPeer() {
   if (outboundPeer) { outboundPeer.pc.close(); outboundPeer = null; }
 }
 
+// ── Audio status helper ───────────────────────────────────────────────────
+function setAudioStatus(text, active) {
+  audioStatus.textContent = text;
+  audioStatus.className = "status-value " + (active ? "active" : "inactive");
+}
+
 // ── Audio unlock ──────────────────────────────────────────────────────────
-// Browsers block autoplay until a user gesture. We unlock on first interaction
-// and retry play() on the teacher audio element.
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
   updateAudioWarning();
+  console.log("[audio] unlocked by user gesture");
   if (teacherAudio) {
     teacherAudio.muted = false;
-    teacherAudio.play().catch(e => console.warn("[unlock] play():", e));
+    teacherAudio.play()
+      .then(() => console.log("[audio] play() succeeded after unlock"))
+      .catch(e => console.warn("[audio] play() after unlock:", e));
   }
-  console.log("[audio] unlocked");
 }
 
 function updateAudioWarning() {

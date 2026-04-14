@@ -34,29 +34,35 @@ const canvas              = document.getElementById("materialCanvas");
 const ctx                 = canvas.getContext("2d");
 
 // ── ICE configuration ─────────────────────────────────────────────────────
-// Using Metered.ca free TURN — reliable, no sign-up needed for the demo key.
-// For production replace with your own credentials from dashboard.metered.ca
+// Multiple verified free TURN providers for redundancy.
+// If one fails auth, the next will be tried automatically.
 const ICE_CONFIG = {
   iceServers: [
+    { urls: "stun:stun.relay.metered.ca:80" },
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" },
-    // Metered.ca free TURN — works cross-network, covers symmetric NAT & cellular
-    {
-      urls: [
-        "turn:a.relay.metered.ca:80",
-        "turn:a.relay.metered.ca:80?transport=tcp",
-        "turn:a.relay.metered.ca:443",
-        "turn:a.relay.metered.ca:443?transport=tcp"
-      ],
-      username: "e8dd65f93a7c9d8e7b3f4a2c",
-      credential: "uMGa+xXyCwDqRNmH"
-    }
+    { urls: "turn:global.relay.metered.ca:80",                    username: "c42ac28730f2eccb2531db32", credential: "Os9aeQUDwLn1A7Qw" },
+    { urls: "turn:global.relay.metered.ca:80?transport=tcp",      username: "c42ac28730f2eccb2531db32", credential: "Os9aeQUDwLn1A7Qw" },
+    { urls: "turn:global.relay.metered.ca:443",                   username: "c42ac28730f2eccb2531db32", credential: "Os9aeQUDwLn1A7Qw" },
+    { urls: "turns:global.relay.metered.ca:443?transport=tcp",    username: "c42ac28730f2eccb2531db32", credential: "Os9aeQUDwLn1A7Qw" }
   ],
   iceTransportPolicy: "all",
   iceCandidatePoolSize: 10
 };
+
+// ── ICE diagnostic logger ─────────────────────────────────────────────────
+// Logs every candidate gathered so you can see if STUN/TURN are working.
+// candidate.type: "host" = LAN, "srflx" = STUN/public IP, "relay" = TURN
+function logCandidate(label, c) {
+  if (!c) return;
+  const type = c.type || "?";
+  const proto = c.protocol || "?";
+  const addr = c.address || c.ip || "?";
+  const port = c.port || "?";
+  console.log(`[ICE][${label}] ${type} ${proto} ${addr}:${port}`);
+  if (type === "relay") console.log(`%c[ICE][${label}] ✅ TURN relay candidate gathered`, "color:green;font-weight:bold");
+  if (type === "srflx") console.log(`%c[ICE][${label}] ✅ STUN srflx candidate gathered`, "color:blue");
+}
 
 // ── Opus SDP helper ───────────────────────────────────────────────────────
 function preferOpus(sdp) {
@@ -67,7 +73,6 @@ function preferOpus(sdp) {
     if (m) { opusPayload = m[1]; break; }
   }
   if (!opusPayload) return sdp;
-
   const result = [];
   for (const line of lines) {
     if (line.startsWith("m=audio")) {
@@ -93,15 +98,14 @@ function preferOpus(sdp) {
 let localStream    = null;
 let isBroadcasting = false;
 
-// outboundPeers: Map<studentId, { pc, iceBuf[] }>  teacher→student audio
+// outboundPeers: Map<studentId, { pc, iceBuf[], restartTimer }>
 const outboundPeers = new Map();
-// inboundPeers:  Map<studentId, { pc, iceBuf[] }>  approved student→teacher
+// inboundPeers:  Map<studentId, { pc, iceBuf[] }>
 const inboundPeers  = new Map();
 // inboundAudio:  Map<studentId, HTMLAudioElement>
 const inboundAudio  = new Map();
 
 const pendingRequests = new Map();
-
 let canDraw = false, penWidth = 2, currentColor = "#ff0000", drawing = false;
 let audioCtxViz = null, analyser = null, animFrame = null;
 
@@ -110,6 +114,7 @@ socket.on("connect", () => {
   connectionStatus.textContent = "Connected";
   connectionStatus.className = "status-badge connected";
   socket.emit("join-as-teacher", roomId);
+  console.log("[teacher] socket connected:", socket.id);
 });
 
 socket.on("disconnect", () => {
@@ -121,13 +126,15 @@ socket.on("disconnect", () => {
 socket.on("teacher-joined", () => {
   startAudioBtn.disabled = false;
   setActiveSpeakerUI("teacher", "Teacher");
+  console.log("[teacher] joined room:", roomId);
 });
 
 // ── Student lifecycle ─────────────────────────────────────────────────────
 socket.on("student-connected", ({ studentId, studentName, totalStudents }) => {
   studentCountEl.textContent = totalStudents;
   addStudentRow(studentId, studentName);
-  if (isBroadcasting && localStream) createOutboundPeer(studentId);
+  console.log(`[teacher] student connected: ${studentName} (${studentId.substr(0,6)})`);
+  if (isBroadcasting && localStream) createOutboundPeer(studentId, studentName);
 });
 
 socket.on("student-left", ({ studentId, totalStudents }) => {
@@ -140,76 +147,110 @@ socket.on("student-left", ({ studentId, totalStudents }) => {
 });
 
 // ── WebRTC signaling ──────────────────────────────────────────────────────
-
 socket.on("webrtc-answer", ({ fromId, sdp }) => {
   const entry = outboundPeers.get(fromId);
   if (!entry) return;
+  console.log(`[out→${fromId.substr(0,6)}] received answer, setting remote desc`);
   entry.pc.setRemoteDescription(new RTCSessionDescription(sdp))
-    .then(() => flushIceBuf(entry))
-    .catch(e => console.error("[outbound] setRemoteDescription:", e));
+    .then(() => {
+      console.log(`[out→${fromId.substr(0,6)}] remote desc set, flushing ${entry.iceBuf.length} buffered candidates`);
+      flushIceBuf(entry, `out→${fromId.substr(0,6)}`);
+    })
+    .catch(e => console.error(`[out→${fromId.substr(0,6)}] setRemoteDescription:`, e));
 });
 
 socket.on("webrtc-offer-student", async ({ fromId, sdp }) => {
+  console.log(`[teacher] inbound offer from student ${fromId.substr(0,6)}`);
   await createInboundPeer(fromId, sdp);
 });
 
-// ICE candidates — buffer until remote description is set
 socket.on("ice-candidate", ({ fromId, candidate, peerType }) => {
   const entry = peerType === "inbound"
     ? inboundPeers.get(fromId)
     : outboundPeers.get(fromId);
   if (!entry || !candidate) return;
 
+  const label = peerType === "inbound" ? `in←${fromId.substr(0,6)}` : `out→${fromId.substr(0,6)}`;
   const pc = entry.pc;
   if (pc.remoteDescription && pc.remoteDescription.type) {
     pc.addIceCandidate(new RTCIceCandidate(candidate))
-      .catch(e => console.warn(`[ice:${peerType}] addIceCandidate:`, e));
+      .catch(e => console.warn(`[${label}] addIceCandidate:`, e));
   } else {
+    console.log(`[${label}] buffering candidate (no remote desc yet)`);
     entry.iceBuf.push(candidate);
   }
 });
 
-function flushIceBuf(entry) {
+function flushIceBuf(entry, label) {
   while (entry.iceBuf.length) {
     const c = entry.iceBuf.shift();
     entry.pc.addIceCandidate(new RTCIceCandidate(c))
-      .catch(e => console.warn("[ice] flush addIceCandidate:", e));
+      .catch(e => console.warn(`[${label}] flush addIceCandidate:`, e));
   }
 }
 
 // ── Outbound peer: teacher → student ─────────────────────────────────────
-async function createOutboundPeer(studentId) {
+async function createOutboundPeer(studentId, studentName) {
   closeOutboundPeer(studentId);
+  const label = `out→${studentId.substr(0,6)}`;
+  console.log(`[${label}] creating peer for ${studentName || studentId.substr(0,6)}`);
 
   const pc = new RTCPeerConnection(ICE_CONFIG);
-  const entry = { pc, iceBuf: [] };
+  const entry = { pc, iceBuf: [], restartTimer: null };
   outboundPeers.set(studentId, entry);
 
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) socket.emit("ice-candidate", { targetId: studentId, candidate, peerType: "inbound" });
+    if (candidate) {
+      logCandidate(label, candidate);
+      socket.emit("ice-candidate", { targetId: studentId, candidate, peerType: "inbound" });
+    } else {
+      console.log(`[${label}] ICE gathering complete`);
+    }
+  };
+
+  pc.onicegatheringstatechange = () => {
+    console.log(`[${label}] gathering: ${pc.iceGatheringState}`);
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    console.log(`[${label}] ICE: ${pc.iceConnectionState}`);
   };
 
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
-    console.log(`[out→${studentId.substr(0,6)}] conn: ${s}`);
+    console.log(`[${label}] conn: ${s}`);
+
+    if (entry.restartTimer) { clearTimeout(entry.restartTimer); entry.restartTimer = null; }
+
+    if (s === "connected") {
+      console.log(`%c[${label}] ✅ CONNECTED`, "color:green;font-weight:bold");
+    }
+
     if (s === "failed") {
-      // Full re-offer with ICE restart — picks up TURN candidates
+      console.warn(`[${label}] ❌ FAILED — restarting ICE`);
+      // Full re-offer with iceRestart so new TURN candidates are gathered
       pc.createOffer({ iceRestart: true })
         .then(o => { o.sdp = preferOpus(o.sdp); return pc.setLocalDescription(o); })
-        .then(() => socket.emit("webrtc-offer", { targetId: studentId, sdp: pc.localDescription }))
-        .catch(e => console.error("[outbound] ICE restart:", e));
+        .then(() => {
+          console.log(`[${label}] ICE restart offer sent`);
+          socket.emit("webrtc-offer", { targetId: studentId, sdp: pc.localDescription });
+        })
+        .catch(e => console.error(`[${label}] ICE restart failed:`, e));
     }
+
     if (s === "disconnected") {
-      setTimeout(() => {
-        if (pc.connectionState === "disconnected") {
+      console.warn(`[${label}] disconnected — will restart in 4s if not recovered`);
+      entry.restartTimer = setTimeout(() => {
+        if (pc.connectionState !== "connected" && pc.connectionState !== "closed") {
+          console.warn(`[${label}] still disconnected, forcing ICE restart`);
           pc.createOffer({ iceRestart: true })
             .then(o => { o.sdp = preferOpus(o.sdp); return pc.setLocalDescription(o); })
             .then(() => socket.emit("webrtc-offer", { targetId: studentId, sdp: pc.localDescription }))
             .catch(() => {});
         }
-      }, 3000);
+      }, 4000);
     }
   };
 
@@ -217,35 +258,62 @@ async function createOutboundPeer(studentId) {
     const offer = await pc.createOffer();
     offer.sdp = preferOpus(offer.sdp);
     await pc.setLocalDescription(offer);
+    console.log(`[${label}] offer sent`);
     socket.emit("webrtc-offer", { targetId: studentId, sdp: pc.localDescription });
   } catch (e) {
-    console.error("[outbound] createOffer:", e);
+    console.error(`[${label}] createOffer:`, e);
   }
 }
 
 function closeOutboundPeer(studentId) {
   const entry = outboundPeers.get(studentId);
-  if (entry) { entry.pc.close(); outboundPeers.delete(studentId); }
+  if (entry) {
+    if (entry.restartTimer) clearTimeout(entry.restartTimer);
+    entry.pc.close();
+    outboundPeers.delete(studentId);
+  }
 }
 
 // ── Inbound peer: approved student → teacher ─────────────────────────────
 async function createInboundPeer(studentId, offerSdp) {
   closeInboundPeer(studentId);
+  const label = `in←${studentId.substr(0,6)}`;
 
   const pc = new RTCPeerConnection(ICE_CONFIG);
   const entry = { pc, iceBuf: [] };
   inboundPeers.set(studentId, entry);
 
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) socket.emit("ice-candidate", { targetId: studentId, candidate, peerType: "outbound" });
+    if (candidate) {
+      logCandidate(label, candidate);
+      socket.emit("ice-candidate", { targetId: studentId, candidate, peerType: "outbound" });
+    } else {
+      console.log(`[${label}] ICE gathering complete`);
+    }
+  };
+
+  pc.onicegatheringstatechange = () => {
+    console.log(`[${label}] gathering: ${pc.iceGatheringState}`);
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    console.log(`[${label}] ICE: ${pc.iceConnectionState}`);
   };
 
   pc.onconnectionstatechange = () => {
-    console.log(`[in←${studentId.substr(0,6)}] conn: ${pc.connectionState}`);
-    if (pc.connectionState === "failed") pc.restartIce();
+    const s = pc.connectionState;
+    console.log(`[${label}] conn: ${s}`);
+    if (s === "connected") console.log(`%c[${label}] ✅ CONNECTED`, "color:green;font-weight:bold");
+    if (s === "failed") { console.warn(`[${label}] ❌ FAILED — restarting ICE`); pc.restartIce(); }
+    if (s === "disconnected") {
+      setTimeout(() => {
+        if (pc.connectionState !== "connected" && pc.connectionState !== "closed") pc.restartIce();
+      }, 4000);
+    }
   };
 
   pc.ontrack = ({ streams }) => {
+    console.log(`[${label}] audio track received`);
     let el = inboundAudio.get(studentId);
     if (!el) {
       el = document.createElement("audio");
@@ -260,13 +328,14 @@ async function createInboundPeer(studentId, offerSdp) {
 
   try {
     await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
-    flushIceBuf(entry);
+    flushIceBuf(entry, label);
     const answer = await pc.createAnswer();
     answer.sdp = preferOpus(answer.sdp);
     await pc.setLocalDescription(answer);
     socket.emit("webrtc-answer-student", { targetId: studentId, sdp: pc.localDescription });
+    console.log(`[${label}] answer sent`);
   } catch (e) {
-    console.error("[inbound] answer:", e);
+    console.error(`[${label}] answer:`, e);
   }
 }
 
@@ -289,7 +358,6 @@ startAudioBtn.onclick = async () => {
         sampleRate: 48000
       }
     });
-
     isBroadcasting = true;
     startAudioBtn.disabled = true;
     stopAudioBtn.disabled = false;
@@ -297,9 +365,9 @@ startAudioBtn.onclick = async () => {
     micStatus.className = "status-value active";
     broadcastStatus.textContent = "Broadcasting";
     broadcastStatus.className = "status-value active";
-
     setupVisualizer();
     socket.emit("teacher-broadcasting");
+    console.log("[teacher] mic started, broadcasting");
   } catch (e) {
     console.error("[teacher] getUserMedia:", e);
     alert("Microphone error: " + e.message);
@@ -307,8 +375,9 @@ startAudioBtn.onclick = async () => {
 };
 
 socket.on("current-students", (students) => {
-  students.forEach(({ studentId }) => {
-    if (isBroadcasting && localStream) createOutboundPeer(studentId);
+  console.log(`[teacher] current students: ${students.length}`);
+  students.forEach(({ studentId, studentName }) => {
+    if (isBroadcasting && localStream) createOutboundPeer(studentId, studentName);
   });
 });
 
