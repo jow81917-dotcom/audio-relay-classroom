@@ -1,22 +1,90 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Teacher</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teacher — Audio Classroom</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<h1>Teacher Panel</h1>
+<div class="page-header">
+  <h1>🎓 Teacher Panel</h1>
+  <div class="room-info">
+    Room: <strong id="roomDisplay"></strong>
+    &nbsp;|&nbsp;
+    <span id="connectionStatus" class="status-badge disconnected">Disconnected</span>
+  </div>
+</div>
 
-<p>Room: <span id="roomDisplay"></span></p>
+<div class="main-grid">
 
-<button id="startAudioBtn">Start Audio</button>
-<button id="stopAudioBtn">Stop Audio</button>
+  <!-- ── Audio Controls ── -->
+  <div class="card">
+    <h2>🎙️ Microphone</h2>
+    <div class="status-row">
+      <span class="status-label">Mic</span>
+      <span id="micStatus" class="status-value inactive">Stopped</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Broadcast</span>
+      <span id="broadcastStatus" class="status-value inactive">Off</span>
+    </div>
+    <div class="btn-row">
+      <button id="startAudioBtn" class="btn btn-primary" disabled>▶ Start Audio</button>
+      <button id="stopAudioBtn"  class="btn btn-danger"  disabled>■ Stop Audio</button>
+    </div>
+    <div id="audioVisualizer" class="visualizer"></div>
+  </div>
 
-<ul id="studentsList"></ul>
+  <!-- ── Active Speaker ── -->
+  <div class="card">
+    <h2>🔊 Active Speaker</h2>
+    <div id="activeSpeakerDisplay"></div>
+    <button id="revokeSpeakerBtn" class="btn btn-warning" disabled>Revoke Speaker</button>
+  </div>
+
+  <!-- ── Pending Requests ── -->
+  <div class="card">
+    <h2>✋ Hand Raises</h2>
+    <ul id="pendingRequestsList" class="request-list">
+      <li class="no-requests">No pending requests</li>
+    </ul>
+  </div>
+
+  <!-- ── Students ── -->
+  <div class="card">
+    <h2>👥 Students (<span id="studentCount">0</span>)</h2>
+    <ul id="studentsList" class="student-list"></ul>
+  </div>
+
+  <!-- ── Material ── -->
+  <div class="card wide">
+    <h2>📎 Material</h2>
+    <div class="upload-row">
+      <input type="file" id="fileInput" accept="image/*">
+      <button id="uploadMaterial" class="btn btn-primary">Upload</button>
+      <button id="clearMaterial"  class="btn btn-danger">Clear</button>
+    </div>
+    <div class="drawing-tools">
+      <button id="penToggle"  class="btn btn-secondary">🖊️ Enable Drawing</button>
+      <button id="penNormal"  class="btn btn-secondary">Thin</button>
+      <button id="penBold"    class="btn btn-secondary">Bold</button>
+      <input  type="color" id="colorPicker" value="#ff0000">
+      <button id="clearCanvas" class="btn btn-warning">Clear Drawing</button>
+    </div>
+    <div class="material-wrap">
+      <p id="noMaterial" class="muted">No material shared yet.</p>
+      <div class="canvas-container">
+        <img id="material" style="display:none; max-width:100%;" alt="material">
+        <canvas id="materialCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+</div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="teacher.js"></script>
-
 </body>
 </html>

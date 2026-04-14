@@ -1,19 +1,76 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Student</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Student — Audio Classroom</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<h1>Student Panel</h1>
+<div class="page-header">
+  <h1>🎒 Student Panel</h1>
+  <div class="room-info">
+    Room: <strong id="roomDisplay"></strong>
+    &nbsp;|&nbsp;
+    <span id="connectionStatus" class="status-badge disconnected">Disconnected</span>
+  </div>
+  <div class="room-info">Name: <strong id="studentNameDisplay"></strong></div>
+</div>
 
-<p>Room: <span id="roomDisplay"></span></p>
+<!-- Audio unlock banner — shown until user taps/clicks -->
+<div id="audioWarning" class="audio-warning" style="display:none;">
+  ⚠️ Tap anywhere or press the button below to enable audio.
+  <button id="unlockAudioBtn" class="btn btn-primary">🔊 Enable Audio</button>
+</div>
 
-<button id="connectBtn">Connect</button>
+<div class="main-grid">
+
+  <!-- ── Status ── -->
+  <div class="card">
+    <h2>📡 Status</h2>
+    <div class="status-row">
+      <span class="status-label">Teacher</span>
+      <span id="teacherStatus" class="status-value inactive">Offline</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Audio</span>
+      <span id="audioStatus" class="status-value inactive">No Audio</span>
+    </div>
+    <div class="btn-row">
+      <button id="testAudioBtn" class="btn btn-secondary">🔔 Test Audio</button>
+    </div>
+    <div id="audioVisualizer" class="visualizer"></div>
+  </div>
+
+  <!-- ── Speaker / Hand ── -->
+  <div class="card">
+    <h2>🔊 Active Speaker</h2>
+    <div id="activeSpeakerDisplay"></div>
+    <div id="speakingIndicator" class="speaking-indicator" style="display:none;">
+      🎤 You are speaking
+    </div>
+    <div class="btn-row">
+      <button id="raiseHandBtn"  class="btn btn-primary">✋ Raise Hand</button>
+      <button id="cancelHandBtn" class="btn btn-danger"  disabled>✖ Cancel</button>
+    </div>
+  </div>
+
+  <!-- ── Material ── -->
+  <div class="card wide">
+    <h2>📎 Material</h2>
+    <div class="material-wrap">
+      <p id="noMaterial" class="muted">No material shared yet.</p>
+      <div class="canvas-container">
+        <img id="material" style="display:none; max-width:100%;" alt="material">
+        <canvas id="materialCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+</div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="student.js"></script>
-
 </body>
 </html>

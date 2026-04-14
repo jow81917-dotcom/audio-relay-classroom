@@ -37,11 +37,11 @@ const ICE_CONFIG = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun3.l.google.com:19302" }
-    // ── Uncomment and fill in when you have TURN credentials ──────────────
-    // { urls: "turn:YOUR_TURN_HOST:3478",             username: "USER", credential: "PASS" },
-    // { urls: "turn:YOUR_TURN_HOST:443?transport=tcp", username: "USER", credential: "PASS" },
-    // { urls: "turns:YOUR_TURN_HOST:443",              username: "USER", credential: "PASS" }
+    { urls: "stun:stun3.l.google.com:19302" },
+    // Open Relay Project — free public TURN (no sign-up needed)
+    { urls: "turn:openrelay.metered.ca:80",            username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443",           username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
   ],
   iceTransportPolicy: "all",
   iceCandidatePoolSize: 10
