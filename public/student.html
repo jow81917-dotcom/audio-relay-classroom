@@ -1,164 +1,19 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student - Audio Classroom</title>
-    <link rel="stylesheet" href="style.css">
-    <style>
-        /* Student-specific styles */
-        .student-controls {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .hand-controls {
-            display: flex;
-            gap: 10px;
-            margin-top: 10px;
-        }
-        
-        #raiseHandBtn {
-            background: #ffc107;
-            color: #212529;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            flex: 1;
-        }
-        
-        #cancelHandBtn {
-            background: #dc3545;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            flex: 1;
-        }
-        
-        #raiseHandBtn:disabled, #cancelHandBtn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        .speaking-indicator {
-            background: #28a745;
-            color: white;
-            padding: 10px;
-            border-radius: 4px;
-            text-align: center;
-            margin: 10px 0;
-            display: none;
-            animation: pulse 1.5s infinite;
-        }
-        
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.7; }
-            100% { opacity: 1; }
-        }
-        
-        .active-speaker {
-            font-size: 1.1em;
-            margin: 10px 0;
-            padding: 10px;
-            background: #e9ecef;
-            border-radius: 4px;
-        }
-        
-        .speaker-indicator.teacher {
-            color: #28a745;
-        }
-        
-        .speaker-indicator.student {
-            color: #007bff;
-        }
-        
-        #studentNameDisplay {
-            font-weight: bold;
-            color: #007bff;
-        }
-    </style>
+  <title>Student</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>👨‍🎓 Student View</h1>
-            <div class="room-info">
-                Room: <span id="roomDisplay">test</span> | 
-                You: <span id="studentNameDisplay"></span>
-                <span id="connectionStatus" class="status-badge">Connecting...</span>
-            </div>
-        </header>
 
-        <!-- Audio Warning -->
-        <div id="audioWarning" class="warning-banner">
-            ⚠️ Click anywhere or press "Unlock Audio" to enable sound
-            <button id="unlockAudioBtn" class="btn-primary">🔊 Unlock Audio</button>
-        </div>
+<h1>Student Panel</h1>
 
-        <div class="main-content">
-            <!-- Left Column - Audio & Controls -->
-            <div class="left-column">
-                <!-- Audio Status Card -->
-                <div class="card">
-                    <h2>🎵 Audio</h2>
-                    
-                    <div class="status-indicators">
-                        <div class="status-item">
-                            <span class="status-label">Teacher:</span>
-                            <span id="teacherStatus" class="status-value inactive">Offline</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Audio:</span>
-                            <span id="audioStatus" class="status-value inactive">No Audio</span>
-                        </div>
-                    </div>
-                    
-                    <div id="audioVisualizer" class="visualizer"></div>
-                    
-                    <button id="testAudioBtn" class="btn-secondary">🔊 Test Speaker</button>
-                </div>
+<p>Room: <span id="roomDisplay"></span></p>
 
-                <!-- Student Controls Card -->
-                <div class="card student-controls">
-                    <h2>✋ Participation</h2>
-                    
-                    <div class="active-speaker">
-                        <strong>Now Speaking:</strong>
-                        <span id="activeSpeakerDisplay">👨‍🏫 Teacher</span>
-                    </div>
-                    
-                    <div id="speakingIndicator" class="speaking-indicator">
-                        🎤 You are speaking (microphone active)
-                    </div>
-                    
-                    <div class="hand-controls">
-                        <button id="raiseHandBtn" class="btn-warning">✋ Raise Hand</button>
-                        <button id="cancelHandBtn" class="btn-danger" disabled>❌ Cancel</button>
-                    </div>
-                </div>
-            </div>
+<button id="connectBtn">Connect</button>
 
-            <!-- Right Column - Material -->
-            <div class="right-column">
-                <!-- Material Display -->
-                <div class="material-container">
-                    <div id="noMaterial" class="no-material">📷 Teacher hasn't shared any material yet</div>
-                    <img id="material" style="display: none;">
-                    <canvas id="materialCanvas"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="student.js"></script>
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="student.js"></script>
 </body>
 </html>

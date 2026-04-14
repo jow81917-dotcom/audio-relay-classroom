@@ -1,209 +1,22 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Teacher - Audio Classroom</title>
-    <link rel="stylesheet" href="style.css">
-    <style>
-        /* Teacher-specific styles */
-        .speaker-management {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 20px;
-            border-left: 4px solid #28a745;
-        }
-        
-        .active-speaker {
-            font-size: 1.1em;
-            margin-bottom: 10px;
-            padding: 10px;
-            background: white;
-            border-radius: 4px;
-        }
-        
-        .speaker-indicator.teacher {
-            color: #28a745;
-            font-weight: bold;
-        }
-        
-        .speaker-indicator.student {
-            color: #007bff;
-            font-weight: bold;
-        }
-        
-        .pending-requests {
-            margin-top: 15px;
-        }
-        
-        .pending-requests h4 {
-            margin: 0 0 10px 0;
-            color: #dc3545;
-        }
-        
-        .pending-request {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 12px;
-            background: white;
-            margin-bottom: 5px;
-            border-radius: 4px;
-            border-left: 3px solid #ffc107;
-        }
-        
-        .request-actions {
-            display: flex;
-            gap: 5px;
-        }
-        
-        .approve-btn {
-            background: #28a745;
-            color: white;
-            border: none;
-            width: 30px;
-            height: 30px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        
-        .reject-btn {
-            background: #dc3545;
-            color: white;
-            border: none;
-            width: 30px;
-            height: 30px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        
-        .no-requests {
-            color: #6c757d;
-            font-style: italic;
-            padding: 10px;
-        }
-        
-        #revokeSpeakerBtn {
-            background: #dc3545;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-left: 10px;
-        }
-        
-        #revokeSpeakerBtn:disabled {
-            background: #6c757d;
-            cursor: not-allowed;
-        }
-        
-        .warning {
-            background-color: #fff3cd !important;
-            border-color: #ffeeba !important;
-            transition: background-color 0.3s;
-        }
-    </style>
+  <title>Teacher</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>👨‍🏫 Teacher Dashboard</h1>
-            <div class="room-info">
-                Room: <span id="roomDisplay">test</span>
-                <span id="connectionStatus" class="status-badge">Connecting...</span>
-            </div>
-        </header>
 
-        <div class="main-content">
-            <!-- Left Column - Audio & Students -->
-            <div class="left-column">
-                <!-- Audio Controls Card -->
-                <div class="card">
-                    <h2>🎤 Audio Broadcast</h2>
-                    
-                    <div class="audio-controls">
-                        <button id="startAudioBtn" class="btn-success" disabled>▶️ Start Broadcasting</button>
-                        <button id="stopAudioBtn" class="btn-danger" disabled>⏹️ Stop Broadcasting</button>
-                    </div>
-                    
-                    <div class="status-indicators">
-                        <div class="status-item">
-                            <span class="status-label">Microphone:</span>
-                            <span id="micStatus" class="status-value inactive">Stopped</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Broadcast:</span>
-                            <span id="broadcastStatus" class="status-value inactive">Off</span>
-                        </div>
-                    </div>
-                    
-                    <div id="audioVisualizer" class="visualizer"></div>
-                </div>
+<h1>Teacher Panel</h1>
 
-                <!-- Speaker Management Card -->
-                <div class="card speaker-management">
-                    <h2>🗣️ Speaker Management</h2>
-                    
-                    <div class="active-speaker">
-                        <strong>Active Speaker:</strong>
-                        <span id="activeSpeakerDisplay">👨‍🏫 Teacher</span>
-                        <button id="revokeSpeakerBtn" class="btn-danger" disabled>Revoke Permission</button>
-                    </div>
-                    
-                    <div class="pending-requests">
-                        <h4>✋ Hand Raises</h4>
-                        <ul id="pendingRequestsList">
-                            <li class="no-requests">No pending requests</li>
-                        </ul>
-                    </div>
-                </div>
+<p>Room: <span id="roomDisplay"></span></p>
 
-                <!-- Students Card -->
-                <div class="card">
-                    <h2>👥 Connected Students (<span id="studentCount">0</span>)</h2>
-                    <ul id="studentsList" class="students-list"></ul>
-                </div>
-            </div>
+<button id="startAudioBtn">Start Audio</button>
+<button id="stopAudioBtn">Stop Audio</button>
 
-            <!-- Right Column - Material & Drawing -->
-            <div class="right-column">
-                <!-- Material Controls -->
-                <div class="card">
-                    <h2>📁 Material Sharing</h2>
-                    
-                    <div class="material-controls">
-                        <input type="file" id="fileInput" accept="image/*">
-                        <button id="uploadMaterial" class="btn-primary">📤 Upload</button>
-                        <button id="clearMaterial" class="btn-secondary">🗑️ Clear</button>
-                    </div>
-                    
-                    <!-- Drawing Tools -->
-                    <div class="drawing-tools">
-                        <button id="penToggle" class="btn-toggle">🖊️ Enable Drawing</button>
-                        <div class="pen-controls">
-                            <button id="penNormal" class="btn-pen active">● Normal</button>
-                            <button id="penBold" class="btn-pen">⬤ Bold</button>
-                            <input type="color" id="colorPicker" value="#ff0000">
-                            <button id="clearCanvas" class="btn-secondary">🧹 Clear Drawing</button>
-                        </div>
-                    </div>
-                </div>
+<ul id="studentsList"></ul>
 
-                <!-- Material Display -->
-                <div class="material-container">
-                    <div id="noMaterial" class="no-material">📷 No material shared</div>
-                    <img id="material" style="display: none;">
-                    <canvas id="materialCanvas"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="teacher.js"></script>
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="teacher.js"></script>
 </body>
 </html>
