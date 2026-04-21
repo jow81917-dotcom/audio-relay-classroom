@@ -9,7 +9,8 @@ let studentName = urlParams.get("name") || "Student-" + Math.random().toString(3
 document.getElementById("roomDisplay").textContent = roomId;
 document.getElementById("studentNameDisplay").textContent = studentName;
 
-const socket = io({ transports: ["websocket", "polling"], upgrade: true });
+const SERVER_URL = window.location.origin;
+const socket = io(SERVER_URL, { transports: ["websocket", "polling"], upgrade: true });
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const connectionStatus    = document.getElementById("connectionStatus");
@@ -91,13 +92,20 @@ socket.on("student-joined", ({ hasTeacher, activeSpeaker, material }) => {
   if (hasTeacher) {
     teacherStatus.textContent = "Teacher Online";
     teacherStatus.className = "status-value active";
+  } else {
+    teacherStatus.textContent = "Waiting for teacher...";
+    teacherStatus.className = "status-value inactive";
   }
   updateActiveSpeakerUI(activeSpeaker, activeSpeaker === "teacher" ? "Teacher" : "Student");
   if (material) showMaterial(material.url);
   updateAudioWarning();
 });
 
-socket.on("join-error", ({ message }) => alert("Cannot join: " + message));
+socket.on("teacher-arrived", () => {
+  console.log("[student] teacher has arrived");
+  teacherStatus.textContent = "Teacher Online";
+  teacherStatus.className = "status-value active";
+});
 
 socket.on("teacher-left", () => {
   console.log("[student] teacher left");

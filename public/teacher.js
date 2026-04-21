@@ -6,7 +6,8 @@ const urlParams = new URLSearchParams(window.location.search);
 const roomId = urlParams.get("room") || "test";
 document.getElementById("roomDisplay").textContent = roomId;
 
-const socket = io({ transports: ["websocket", "polling"], upgrade: true });
+const SERVER_URL = window.location.origin;
+const socket = io(SERVER_URL, { transports: ["websocket", "polling"], upgrade: true });
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const connectionStatus    = document.getElementById("connectionStatus");
@@ -494,7 +495,7 @@ uploadBtn.onclick = async () => {
   const fd = new FormData();
   fd.append("file", file);
   try {
-    const res  = await fetch("/upload", { method: "POST", body: fd });
+    const res  = await fetch(`${SERVER_URL}/upload`, { method: "POST", body: fd });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }
     materialImg.src = data.url;
